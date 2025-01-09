@@ -7,6 +7,7 @@ import numpy as np
 
 from models.arg import Trainer as ARGTrainer
 from models.argd import Trainer as ARGDTrainer
+from models.argVL import Trainer as ARGVLTrainer
 
 def setup_seed(seed):
     random.seed(seed)
@@ -60,10 +61,12 @@ class Run():
         param = train_param
         best_param = []
 
-        json_dir = os.path.join(
-            './logs/json/',
-            self.config['model_name'] + '_' + self.config['data_name']
-        )
+        #json_dir = os.path.join(
+        #    './logs/json/',
+        #    self.config['model_name'] + '_' + self.config['data_name']
+        #)
+
+        json_dir = f"./logs/json/{self.config['model_name']}_{self.config['dataset']}"
         json_path = os.path.join(
             json_dir,
             'month_' + str(self.config['month']) + '.json'
@@ -74,8 +77,8 @@ class Run():
         json_result = []
         for p, vs in param.items():
             setup_seed(self.config['seed'])
-            best_metric = {}
-            best_metric['metric'] = 0
+            best_metric = None
+            # best_metric['metric'] = 0
             best_v = vs[0]
             best_model_path = None
             for i, v in enumerate(vs):
@@ -85,6 +88,8 @@ class Run():
                     trainer = ARGTrainer(self.config, self.writer)
                 elif self.config['model_name'] == 'ARG-D':
                     trainer = ARGDTrainer(self.config, self.writer)
+                elif self.config['model_name'] == 'ARG_VL':
+                    trainer = ARGVLTrainer(self.config,self.writer)
                 else:
                     raise ValueError('model_name is not supported')
 
@@ -95,13 +100,13 @@ class Run():
                     'train_epochs': train_epochs,
                 })
 
-                if metrics['metric'] > best_metric['metric']:
+                if best_metric is None or metrics['classifier']['metric'] > best_metric['classifier']['metric']:
                     best_metric = metrics
                     best_v = v
                     best_model_path = model_path
             best_param.append({p: best_v})
             print("best model path:", best_model_path)
-            print("best macro f1:", best_metric['metric'])
+            print("best macro f1:", best_metric['classifier']['metric'])
             print("best metric:", best_metric)
             logger.info("best model path:" + best_model_path)
             logger.info("best param " + p + ": " + str(best_v))

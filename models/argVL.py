@@ -12,7 +12,7 @@ from torch import Tensor
 from utils import dataloader
 from .layers import *
 
-from transformers import BertModel
+from transformers import BertModel, Swinv2Model
 from utils.utils import data2gpu, Averager, metrics, Recorder, try_all_gpus, ARGMetricsRecorder
 
 
@@ -22,6 +22,7 @@ class ARGModel(torch.nn.Module):
 
         self.bert_content = BertModel.from_pretrained(config['bert_path']).requires_grad_(False)
         self.bert_FTR = BertModel.from_pretrained(config['bert_path']).requires_grad_(False)
+        self.image_encoder = Swinv2Model.from_pretrained(config['image_encoder_path']).requires_grad_(False)
 
         for name, param in self.bert_content.named_parameters():
             if name.startswith("encoder.layer.11"):
@@ -30,6 +31,12 @@ class ARGModel(torch.nn.Module):
                 param.requires_grad = False
         for name, param in self.bert_FTR.named_parameters():
             if name.startswith("encoder.layer.11"):
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+
+        for name, param in self.image_encoder.named_parameters():
+            if name.startswith("encoder.layers.3"):
                 param.requires_grad = True
             else:
                 param.requires_grad = False
@@ -82,6 +89,8 @@ class ARGModel(torch.nn.Module):
                                               nn.ReLU(),
                                               nn.Linear(config['model']['mlp']['dims'][-1], 3))
 
+
+
         self.content_attention = MaskAttention(config['emb_dim'])
 
         self.co_attention_2 = ParallelCoAttentionNetwork(config['emb_dim'], config['co_attention_dim'], mask_in=True)
@@ -92,6 +101,7 @@ class ARGModel(torch.nn.Module):
 
         self.cross_attention_ftr_2 = SelfAttentionFeatureExtract(1, config['emb_dim'])
         self.cross_attention_ftr_3 = SelfAttentionFeatureExtract(1, config['emb_dim'])
+        self.dualCrossAttention = DualCrossAttentionFusion(config['emb_dim'],4,config['model']['mlp']['dropout'],4)
 
     def forward(self,**kwargs):
         """
@@ -110,11 +120,17 @@ class ARGModel(torch.nn.Module):
         }
         """
         content, content_masks = kwargs['content'], kwargs['content_masks']
+        image = kwargs['image']
+
 
         FTR_2, FTR_2_masks = kwargs['FTR_2'], kwargs['FTR_2_masks']
         FTR_3, FTR_3_masks = kwargs['FTR_3'], kwargs['FTR_3_masks']
 
         content_feature = self.bert_content(content, attention_mask=content_masks)[0]
+        image_feature = self.image_encoder(image)
+        image_mask = torch.ones((image_feature.shape[0],image_feature.shape[1]))
+        content_feature,content_masks = self.dualCrossAttention(image_feature,content_feature,image_mask,content_masks)
+
         content_feature_1, content_feature_2 = content_feature, content_feature
 
         FTR_2_feature = self.bert_FTR(FTR_2, attention_mask=FTR_2_masks)[0]

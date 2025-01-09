@@ -1,3 +1,4 @@
+import torch
 from sklearn.metrics import recall_score, precision_score, f1_score, accuracy_score, roc_auc_score
 import numpy as np
 from datetime import datetime as dt 
@@ -6,6 +7,141 @@ import os
 
 import json
 import pandas as pd
+from tqdm import tqdm
+
+
+
+def usefulness_metrics(y_true, y_pred):
+    all_metrics = {}
+
+    try:
+        all_metrics['auc'] = roc_auc_score(y_true, y_pred, average='macro')
+    except ValueError:
+        all_metrics['auc'] = -1
+    try:
+        all_metrics['spauc'] = roc_auc_score(y_true, y_pred, average='macro', max_fpr=0.1)
+    except ValueError:
+        all_metrics['spauc'] = -1
+    y_pred = np.around(np.array(y_pred)).astype(int)
+    all_metrics['metric'] = f1_score(y_true, y_pred, average='macro')
+    try:
+        all_metrics['f1_unuseful'], all_metrics['f1_useful'] = f1_score(y_true, y_pred, average=None)
+    except ValueError:
+        all_metrics['f1_unuseful'], all_metrics['f1_useful'] = -1, -1
+    all_metrics['recall'] = recall_score(y_true, y_pred, average='macro')
+    try:
+        all_metrics['recall_unuseful'], all_metrics['recall_useful'] = recall_score(y_true, y_pred, average=None)
+    except ValueError:
+        all_metrics['recall_unuseful'], all_metrics['recall_useful'] = -1, -1
+    all_metrics['precision'] = precision_score(y_true, y_pred, average='macro')
+    try:
+        all_metrics['precision_unuseful'], all_metrics['precision_useful'] = precision_score(y_true, y_pred, average=None)
+    except ValueError:
+        all_metrics['precision_unuseful'], all_metrics['precision_useful'] = -1, -1
+    all_metrics['acc'] = accuracy_score(y_true, y_pred)
+
+    return all_metrics
+
+
+
+def metrics(y_true, y_pred):
+    all_metrics = {}
+
+    try:
+        all_metrics['auc'] = roc_auc_score(y_true, y_pred, average='macro')
+    except ValueError:
+        all_metrics['auc'] = -1
+    try:
+        all_metrics['spauc'] = roc_auc_score(y_true, y_pred, average='macro', max_fpr=0.1)
+    except ValueError:
+        all_metrics['spauc'] = -1
+    y_pred = np.around(np.array(y_pred)).astype(int)
+    all_metrics['metric'] = f1_score(y_true, y_pred, average='macro')
+    try:
+        all_metrics['f1_real'], all_metrics['f1_fake'] = f1_score(y_true, y_pred, average=None)
+    except ValueError:
+        all_metrics['f1_real'], all_metrics['f1_fake'] = -1, -1
+    all_metrics['recall'] = recall_score(y_true, y_pred, average='macro')
+    try:
+        all_metrics['recall_real'], all_metrics['recall_fake'] = recall_score(y_true, y_pred, average=None)
+    except ValueError:
+        all_metrics['recall_real'], all_metrics['recall_fake'] = -1, -1
+    all_metrics['precision'] = precision_score(y_true, y_pred, average='macro')
+    try:
+        all_metrics['precision_real'], all_metrics['precision_fake'] = precision_score(y_true, y_pred, average=None)
+    except ValueError:
+        all_metrics['precision_real'], all_metrics['precision_fake'] = -1, -1
+    all_metrics['acc'] = accuracy_score(y_true, y_pred)
+
+    return all_metrics
+
+
+def llm_metrics(y_true, y_pred):
+    acc = accuracy_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred, average='macro')
+    recall = recall_score(y_true, y_pred, average='macro')
+    recall_real, recall_fake, _ = recall_score(y_true, y_pred, average=None, labels=[0, 1, 2])
+    precision = precision_score(y_true, y_pred, average='macro')
+    precision_real, precision_fake, _ = precision_score(y_true, y_pred, average=None, labels=[0, 1, 2])
+    return {'acc': acc, 'f1': f1, 'recall': recall, 'precision': precision, 'precision_real': precision_real,
+            'precision_fake': precision_fake, 'recall_real': recall_real, 'recall_fake': recall_fake}
+
+
+class ARGMetricsRecorder:
+
+
+    def __init__(self):
+        self.classifier_labels = []
+        self.classifier_predictions = []
+
+        self.llm_judgment_labels = []
+        self.llm_judgment_predictions = []
+
+        self.rationale_usefulness_labels = []
+        self.rationale_usefulness_predictions = []
+
+    def record(self,batch_data,res):
+        batch_label = batch_data['label']
+        self.classifier_labels.append(batch_label)
+        self.classifier_predictions.append(res['classify_pred'])
+        self.llm_judgment_labels.append(torch.cat((batch_data['FTR_2_pred'], batch_data['FTR_3_pred']), dim=0))
+        llm_judgment_prediction = torch.cat(
+            (res['simple_ftr_2_pred'].argmax(dim=-1), res['simple_ftr_3_pred'].argmax(dim=-1))
+            ,dim=0)
+        self.llm_judgment_predictions.append(llm_judgment_prediction)
+        self.rationale_usefulness_labels.append(torch.cat((batch_data['FTR_2_acc'], batch_data['FTR_3_acc']), dim=0))
+        self.rationale_usefulness_predictions.append(torch.cat((res['hard_ftr_2_pred'], res['hard_ftr_3_pred']), dim=0))
+
+
+    def get_metrics(self):
+        self.classifier_labels = torch.cat(self.classifier_labels, dim=0).cpu().numpy()
+        self.classifier_predictions = torch.cat(self.classifier_predictions, dim=0).cpu().numpy()
+        self.llm_judgment_labels = torch.cat(self.llm_judgment_labels, dim=0).cpu().numpy()
+        self.llm_judgment_predictions = torch.cat(self.llm_judgment_predictions, dim=0).cpu().numpy()
+        self.rationale_usefulness_labels = torch.cat(self.rationale_usefulness_labels, dim=0).cpu().numpy()
+        self.rationale_usefulness_predictions = torch.cat(self.rationale_usefulness_predictions, dim=0).cpu().numpy()
+
+        classifier_metrics = metrics(self.classifier_labels, self.classifier_predictions)
+        llm_judgment_metrics = llm_metrics(self.llm_judgment_labels, self.llm_judgment_predictions)
+        rationale_usefulness_metrics = usefulness_metrics(self.rationale_usefulness_labels, self.rationale_usefulness_predictions)
+
+        return {
+            'classifier': classifier_metrics,
+            'llm_judgment': llm_judgment_metrics,
+            'rationale_usefulness': rationale_usefulness_metrics
+        }
+
+def try_all_gpus():
+    return [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
+
+
+def data2gpu(batch, use_cuda, data_type):
+    if use_cuda:
+        return {
+            k:batch[k].cuda(0)
+            for k in batch.keys() if batch[k] is not None and isinstance(batch[k], torch.Tensor)
+        }
+    return batch
 
 class Recorder():
 
@@ -47,77 +183,8 @@ class NpEncoder(json.JSONEncoder):
             return obj.tolist()
         return super(NpEncoder, self).default(obj)
 
-def metrics(y_true, y_pred):
-    all_metrics = {}
 
-    try:
-        all_metrics['auc'] = roc_auc_score(y_true, y_pred, average='macro')
-    except ValueError:
-        all_metrics['auc'] = -1
-    try:
-        all_metrics['spauc'] = roc_auc_score(y_true, y_pred, average='macro', max_fpr=0.1)
-    except ValueError:
-        all_metrics['spauc'] = -1
-    y_pred = np.around(np.array(y_pred)).astype(int)
-    all_metrics['metric'] = f1_score(y_true, y_pred, average='macro')
-    try:
-        all_metrics['f1_real'], all_metrics['f1_fake'] = f1_score(y_true, y_pred, average=None)
-    except ValueError:
-        all_metrics['f1_real'], all_metrics['f1_fake'] = -1, -1
-    all_metrics['recall'] = recall_score(y_true, y_pred, average='macro')
-    try:
-        all_metrics['recall_real'], all_metrics['recall_fake'] = recall_score(y_true, y_pred, average=None)
-    except ValueError:
-        all_metrics['recall_real'], all_metrics['recall_fake'] = -1, -1
-    all_metrics['precision'] = precision_score(y_true, y_pred, average='macro')
-    try:
-        all_metrics['precision_real'], all_metrics['precision_fake'] = precision_score(y_true, y_pred, average=None)
-    except ValueError:
-        all_metrics['precision_real'], all_metrics['precision_fake']= -1, -1
-    all_metrics['acc'] = accuracy_score(y_true, y_pred)
-    
-    return all_metrics
 
-def data2gpu(batch, use_cuda, data_type):
-    if use_cuda:
-        if data_type == 'rationale':
-            batch_data = {
-                'content': batch[0].cuda(),
-                'content_masks': batch[1].cuda(),
-                'FTR_2_pred': batch[2].cuda(),
-                'FTR_2_acc': batch[3].cuda(),
-                'FTR_3_pred': batch[4].cuda(),
-                'FTR_3_acc': batch[5].cuda(),
-                'FTR_2': batch[6].cuda(),
-                'FTR_2_masks': batch[7].cuda(),
-                'FTR_3': batch[8].cuda(),
-                'FTR_3_masks': batch[9].cuda(),
-                'label': batch[10].cuda(),
-                'id': batch[11].cuda(),
-            }
-        else:
-            print('error data type!')
-            exit()
-    else:
-        if data_type == 'rationale':
-            batch_data = {
-                'content': batch[0],
-                'content_masks': batch[1],
-                'FTR_2_pred': batch[2],
-                'FTR_2_acc': batch[3],
-                'FTR_3_pred': batch[4],
-                'FTR_3_acc': batch[5],
-                'FTR_2': batch[6],
-                'FTR_2_masks': batch[7],
-                'FTR_3': batch[8],
-                'FTR_3_masks': batch[9],
-                'label': batch[10],
-                'id': batch[11],
-            }
-        else:
-            print('error data type!')
-            exit()
-    return batch_data
 
 class Averager():
 

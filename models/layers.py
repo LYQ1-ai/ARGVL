@@ -6,6 +6,41 @@ from torch.autograd import Function
 import math
 from timm.models.vision_transformer import Block
 
+
+
+
+class DualCrossAttentionLayer(nn.Module):
+    def __init__(self,emb_dim,num_heads,dropout):
+        super(DualCrossAttentionLayer, self).__init__()
+        self.attention1 = nn.MultiheadAttention(emb_dim,num_heads,dropout=dropout,batch_first=True)
+        self.attention2 = nn.MultiheadAttention(emb_dim,num_heads,dropout=dropout,batch_first=True)
+
+    def forward(self,input1,input2,mask1,mask2):
+        """
+        :param input1: shape (batch_size, seq_len, emb_dim)
+        :param input2: shape (batch_size,seq_len, emb_dim)
+        :return: (batch_size, seq_len, emb_dim) ,(batch_size, seq_len, emb_dim)
+        """
+        return (self.attention1(query = input1,key = input2,value = input2,key_padding_mask=~mask2)[0],
+                self.attention2(query = input2,key = input1,value = input1,key_padding_mask=~mask1)[0])
+
+
+class DualCrossAttentionFusion(nn.Module):
+    def __init__(self,emb_dim,num_heads,dropout,num_layers):
+        super(DualCrossAttentionFusion, self).__init__()
+        self.dualCrossAttention = nn.ModuleList([
+            DualCrossAttentionLayer(emb_dim, num_heads, dropout) for _ in range(num_layers)
+        ])
+
+    def forward(self,input1,input2,mask1,mask2):
+        for blk in self.dualCrossAttention:
+            input1,input2 = blk(input1,input2,mask1,mask2)
+
+        return torch.cat([input1,input2],dim=1),torch.cat([mask1,mask2],dim=1)
+
+
+
+
 class ReverseLayerF(Function):
     @staticmethod
     def forward(ctx, input_, alpha):

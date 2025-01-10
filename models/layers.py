@@ -21,8 +21,8 @@ class DualCrossAttentionLayer(nn.Module):
         :param input2: shape (batch_size,seq_len, emb_dim)
         :return: (batch_size, seq_len, emb_dim) ,(batch_size, seq_len, emb_dim)
         """
-        return (self.attention1(query = input1,key = input2,value = input2,key_padding_mask=~mask2)[0],
-                self.attention2(query = input2,key = input1,value = input1,key_padding_mask=~mask1)[0])
+        return (self.attention1(query = input1,key = input2,value = input2,key_padding_mask=~mask2.bool())[0],
+                self.attention2(query = input2,key = input1,value = input1,key_padding_mask=~mask1.bool())[0])
 
 
 class DualCrossAttentionFusion(nn.Module):

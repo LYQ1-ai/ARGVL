@@ -3,7 +3,7 @@ import argparse
 import json
 from utils.utils import get_tensorboard_writer
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_name', type=str, default='ARG')
@@ -44,7 +44,9 @@ parser.add_argument('--kd_loss_weight', type=float, default=1)
 parser.add_argument('--teacher_path', type=str)
 
 args = parser.parse_args()
-# os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+
+#os.environ['TORCH_USE_CUDA_DSA'] = '1'
 
 from grid_search import Run
 import torch

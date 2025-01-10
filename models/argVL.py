@@ -127,8 +127,8 @@ class ARGModel(torch.nn.Module):
         FTR_3, FTR_3_masks = kwargs['FTR_3'], kwargs['FTR_3_masks']
 
         content_feature = self.bert_content(content, attention_mask=content_masks)[0]
-        image_feature = self.image_encoder(image)
-        image_mask = torch.ones((image_feature.shape[0],image_feature.shape[1]))
+        image_feature = self.image_encoder(image)[0]
+        image_mask = torch.ones((image_feature.shape[0],image_feature.shape[1]),device=image_feature.device)
         content_feature,content_masks = self.dualCrossAttention(image_feature,content_feature,image_mask,content_masks)
 
         content_feature_1, content_feature_2 = content_feature, content_feature
@@ -253,7 +253,7 @@ class Trainer():
 
         self.save_path = os.path.join(
             self.config['save_param_dir'],
-            self.config['model_name'] + '_' + self.config['data_name'],
+            self.config['model_name'] + '_' + self.config['dataset'],
             str(self.config['month']))
         if os.path.exists(self.save_path):
             self.save_param_dir = self.save_path

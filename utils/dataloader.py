@@ -28,6 +28,12 @@ label_dict_ftr_pred = {
     2: 2
 }
 
+label_str2int_dict = {
+    'real': 0,
+    'fake': 1,
+    'other': 2,
+}
+
 def word2input(texts, max_len, tokenizer):
     token_ids = []
     for i, text in enumerate(texts):
@@ -155,7 +161,7 @@ def get_dataloader_qwen_goss(path, max_len, batch_size, shuffle, bert_path, data
     df['image_path'] = df['image_id'].apply(lambda x: f'{image_dir}/{x}_top_img.png')
     tokenizer = AutoTokenizer.from_pretrained(bert_path)
     image_processor = AutoImageProcessor.from_pretrained(image_encoder_path) if image_encoder_path is not None else None
-    print(f'load {data_type} data: sum {df.shape[0]} real {(df["label"]==1).sum()} fake {(df["label"]==0).sum()}')
+    print(f'load {data_type} data: sum {df.shape[0]} real {(df["label"]==0).sum()} fake {(df["label"]==1).sum()}')
     cache_file = f'{path}/{data_type}.pkl'
     ds = ARGDataset(df,image_processor,max_len,tokenizer,cache_file)
     return DataLoader(
@@ -229,7 +235,7 @@ def get_dataloader_arg(path, max_len, batch_size, shuffle, bert_path, data_type,
         df['cs_pred'] = df['td_pred'].apply(lambda x: label_dict_ftr_pred[x]).astype(int)
 
 
-    print(f'load {data_type} data: sum {df.shape[0]} real {(df["label"]==1).sum()} fake {(df["label"]==0).sum()}')
+    print(f'load {data_type} data: sum {df.shape[0]} real {(df["label"]==label_str2int_dict["real"]).sum()} fake {(df["label"]==label_str2int_dict["fake"]).sum()}')
     tokenizer = BertTokenizer.from_pretrained(bert_path)
     cache_file = f'{path}/{data_type}.pkl'
     ds = ARGDataset(df,None,max_len,tokenizer,cache_file)

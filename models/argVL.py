@@ -92,6 +92,7 @@ class ARGModel(torch.nn.Module):
 
 
         self.content_attention = MaskAttention(config['emb_dim'])
+        self.image_attention = MaskAttention(config['emb_dim'])
 
         self.co_attention_2 = ParallelCoAttentionNetwork(config['emb_dim'], config['co_attention_dim'], mask_in=True)
         self.co_attention_3 = ParallelCoAttentionNetwork(config['emb_dim'], config['co_attention_dim'], mask_in=True)
@@ -129,7 +130,6 @@ class ARGModel(torch.nn.Module):
         content_feature = self.bert_content(content, attention_mask=content_masks)[0]
         image_feature = self.image_encoder(image)[0]
         image_mask = torch.ones((image_feature.shape[0],image_feature.shape[1]),device=image_feature.device)
-        content_feature,content_masks = self.dualCrossAttention(image_feature,content_feature,image_mask,content_masks)
 
         content_feature_1, content_feature_2 = content_feature, content_feature
 
@@ -159,6 +159,7 @@ class ARGModel(torch.nn.Module):
         simple_ftr_3_pred = self.simple_mlp_ftr_3(self.simple_ftr_3_attention(FTR_3_feature)[0]).squeeze(1)
 
         attn_content, _ = self.content_attention(content_feature_1, mask=content_masks)
+        attn_image, _ = self.image_attention(image_feature, mask=image_mask)
 
         reweight_score_ftr_2 = self.score_mapper_ftr_2(mutual_FTR_content_2)
         reweight_score_ftr_3 = self.score_mapper_ftr_3(mutual_FTR_content_3)
@@ -167,7 +168,7 @@ class ARGModel(torch.nn.Module):
         reweight_expert_3 = reweight_score_ftr_3 * expert_3
 
         all_feature = torch.cat(
-            (attn_content.unsqueeze(1), reweight_expert_2.unsqueeze(1), reweight_expert_3.unsqueeze(1)),
+            (attn_content.unsqueeze(1), reweight_expert_2.unsqueeze(1), reweight_expert_3.unsqueeze(1),attn_image.unsqueeze(1)),
             dim=1
         )
         final_feature, _ = self.aggregator(all_feature)

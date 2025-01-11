@@ -6,7 +6,7 @@ from torch import nn
 from tqdm import tqdm
 from transformers import BertModel
 
-from models.arg import DualCrossAttentionFeatureAggregator
+
 from utils.dataloader import load_data
 from utils.utils import data2gpu, try_all_gpus
 
@@ -231,6 +231,7 @@ def compute_metrics(predictions, labels):
     }
 
 
+
 def load_model_if_exists(model, model_path):
     """
     判断模型文件是否存在，如果存在则加载参数。
@@ -256,6 +257,7 @@ def test_model(model,data_loader):
     pred = []
     for batch in tqdm(data_loader):
         with torch.no_grad():
+            batch = filter_usual_data(batch)
             batch_data = data2gpu(batch, True, 'val')
             test_labels.append(torch.cat([batch_data['FTR_2_acc'], batch_data['FTR_3_acc']], dim=0))
             outputs = model(**batch_data)
@@ -268,14 +270,39 @@ def test_model(model,data_loader):
     return metrics
 
 
+def filter_usual_data(batch_data):
+    label1 = batch_data['FTR_2_acc']
+    useful_label1 = (label1 == 1).nonzero().squeeze(-1)
+    unuseful_label1 = (label1 == 0).nonzero().squeeze(-1)
+    min_len1 = min(len(useful_label1), len(unuseful_label1))
+    final_index1 = torch.cat([useful_label1[:min_len1], unuseful_label1[:min_len1]], dim=0)
+    batch_data['FTR_2_acc'] = batch_data['FTR_2_acc'][final_index1]
+    batch_data['FTR_2'] = batch_data['FTR_2'][final_index1,:]
+    batch_data['FTR_2_masks'] = batch_data['FTR_2_masks'][final_index1,:]
+
+    label2 = batch_data['FTR_3_acc']
+    useful_label2 = (label2 == 1).nonzero().squeeze(-1)
+    unuseful_label2 = (label2 == 0).nonzero().squeeze(-1)
+    min_len2 = min(len(useful_label2), len(unuseful_label2))
+    final_index2 = torch.cat([useful_label2[:min_len2], unuseful_label2[:min_len2]], dim=0)
+    batch_data['FTR_3_acc'] = batch_data['FTR_3_acc'][final_index2]
+    batch_data['FTR_3'] = batch_data['FTR_3'][final_index2,:]
+    batch_data['FTR_3_masks'] = batch_data['FTR_3_masks'][final_index2,:]
+
+
+    return batch_data
+
+
+
 def train_model(model,config,train_loader,val_loader):
     model.train()
-    loss_fn = nn.BCELoss()
+    loss_fn = nn.BCEWithLogitsLoss()
     early_stopping = EarlyStopping(patience=config['early_stop'])
     optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
     for epoch in range(50):
         avg_loss = 0.0
         for batch_data in tqdm(train_loader):
+            batch_data = filter_usual_data(batch_data)
             if config['use_cuda']:
                 batch_data = data2gpu(batch_data, True, 'train')
 
@@ -299,9 +326,9 @@ def train_model(model,config,train_loader,val_loader):
 
 if __name__ == '__main__':
     print(os.getcwd())
-    config = json.loads(open('../config/arg_config_win.json', 'r').read())
+    config = json.loads(open('../config/arg_qwen_gosspipcop_config_win.json', 'r').read())
     train_loader, val_loader, test_loader = load_data(config)
-    model_name = 'DualBertRationaleUsefulModel'
+    model_name = 'TextUsefulModel'
     if model_name == 'TextUsefulModel':
         model = TextUsefulModel(config)
         model_path = 'text_useful_model.pth'

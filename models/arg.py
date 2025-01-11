@@ -157,14 +157,9 @@ class ARGModel(torch.nn.Module):
         final_feature, _ = self.aggregator(all_feature)
 
         label_pred = self.mlp(final_feature)
-        gate_value = torch.concat([
-            reweight_score_ftr_2,
-            reweight_score_ftr_3
-        ], dim=1)
 
         res = {
             'classify_pred': torch.sigmoid(label_pred.squeeze(1)),
-            'gate_value': gate_value,
             'final_feature': final_feature,
             'content_feature': attn_content,
             'ftr_2_feature': reweight_expert_2,

@@ -109,9 +109,11 @@ class ARGModel(torch.nn.Module):
             'simple_ftr_3_pred': CS LLM Judgment Predictor ,shape (batch_size)
         }
         """
-        content,content_masks = kwargs['content'],kwargs['content_masks']
-        FTR_2,FTR_2_masks = kwargs['FTR_2'],kwargs['FTR_2_masks']
-        FTR_3,FTR_3_masks = kwargs['FTR_3'],kwargs['FTR_3_masks']
+        content, content_masks = kwargs['content'], kwargs['content_masks']
+
+        FTR_2, FTR_2_masks = kwargs['FTR_2'], kwargs['FTR_2_masks']
+        FTR_3, FTR_3_masks = kwargs['FTR_3'], kwargs['FTR_3_masks']
+
         content_feature = self.bert_content(content, attention_mask=content_masks)[0]
         content_feature_1, content_feature_2 = content_feature, content_feature
 
@@ -119,7 +121,7 @@ class ARGModel(torch.nn.Module):
         FTR_3_feature = self.bert_FTR(FTR_3, attention_mask=FTR_3_masks)[0]
 
         mutual_content_FTR_2, _ = self.cross_attention_content_2( \
-            content_feature_2, FTR_2_feature, content_masks)# Ft->x query = t value = x
+            content_feature_2, FTR_2_feature, content_masks)
         expert_2 = torch.mean(mutual_content_FTR_2, dim=1)
 
         mutual_content_FTR_3, _ = self.cross_attention_content_3( \
@@ -127,7 +129,7 @@ class ARGModel(torch.nn.Module):
         expert_3 = torch.mean(mutual_content_FTR_3, dim=1)
 
         mutual_FTR_content_2, _ = self.cross_attention_ftr_2( \
-            FTR_2_feature, content_feature_2, FTR_2_masks) # Fx->t query = x value = t
+            FTR_2_feature, content_feature_2, FTR_2_masks)
         mutual_FTR_content_2 = torch.mean(mutual_FTR_content_2, dim=1)
 
         mutual_FTR_content_3, _ = self.cross_attention_ftr_3( \
@@ -137,8 +139,7 @@ class ARGModel(torch.nn.Module):
         hard_ftr_2_pred = self.hard_mlp_ftr_2(mutual_FTR_content_2).squeeze(1)
         hard_ftr_3_pred = self.hard_mlp_ftr_3(mutual_FTR_content_3).squeeze(1)
 
-        simple_ftr_2_pred = self.simple_mlp_ftr_2(self.simple_ftr_2_attention(FTR_2_feature)[0]).squeeze(
-            1)  # Simple == LLM Judgment Predictor
+        simple_ftr_2_pred = self.simple_mlp_ftr_2(self.simple_ftr_2_attention(FTR_2_feature)[0]).squeeze(1)
         simple_ftr_3_pred = self.simple_mlp_ftr_3(self.simple_ftr_3_attention(FTR_3_feature)[0]).squeeze(1)
 
         attn_content, _ = self.content_attention(content_feature_1, mask=content_masks)
@@ -156,14 +157,27 @@ class ARGModel(torch.nn.Module):
         final_feature, _ = self.aggregator(all_feature)
 
         label_pred = self.mlp(final_feature)
+        gate_value = torch.concat([
+            reweight_score_ftr_2,
+            reweight_score_ftr_3
+        ], dim=1)
 
-        return {
+        res = {
             'classify_pred': torch.sigmoid(label_pred.squeeze(1)),
-            'hard_ftr_2_pred': hard_ftr_2_pred,
-            'hard_ftr_3_pred': hard_ftr_3_pred,
-            'simple_ftr_2_pred': simple_ftr_2_pred,
-            'simple_ftr_3_pred': simple_ftr_3_pred,
+            'gate_value': gate_value,
+            'final_feature': final_feature,
+            'content_feature': attn_content,
+            'ftr_2_feature': reweight_expert_2,
+            'ftr_3_feature': reweight_expert_3
         }
+
+        res['hard_ftr_2_pred'] = hard_ftr_2_pred
+        res['hard_ftr_3_pred'] = hard_ftr_3_pred
+
+        res['simple_ftr_2_pred'] = simple_ftr_2_pred
+        res['simple_ftr_3_pred'] = simple_ftr_3_pred
+
+        return res
 
 
 def train_epoch(model, loss_fn, config, train_loader, optimizer, epoch, writer):
@@ -186,7 +200,9 @@ def train_epoch(model, loss_fn, config, train_loader, optimizer, epoch, writer):
         simple_ftr_2_label = batch_data['FTR_2_pred']
         simple_ftr_3_label = batch_data['FTR_3_pred']
 
-        res = model(**batch_data)
+        batch_input_data = {**config, **batch_data}
+
+        res = model(**batch_input_data)
         loss_classify = loss_fn(res['classify_pred'], label.float())
 
         loss_hard_aux_fn = torch.nn.BCELoss()
@@ -199,8 +215,7 @@ def train_epoch(model, loss_fn, config, train_loader, optimizer, epoch, writer):
             res['simple_ftr_3_pred'], simple_ftr_3_label.long())
 
         loss = loss_classify
-        loss += config['model'][
-                    'rationale_usefulness_evaluator_weight'] * loss_hard_aux / 2  # TODO 这里对nums_expert使用了硬编码，如果Rationale个数增加需要额外调整
+        loss += config['model']['rationale_usefulness_evaluator_weight'] * loss_hard_aux / 2
         loss += config['model']['llm_judgment_predictor_weight'] * loss_simple_aux / 2
 
         optimizer.zero_grad()

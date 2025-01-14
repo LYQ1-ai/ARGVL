@@ -92,6 +92,7 @@ class ARGModel(torch.nn.Module):
 
         self.cross_attention_ftr_2 = SelfAttentionFeatureExtract(1, config['emb_dim'])
         self.cross_attention_ftr_3 = SelfAttentionFeatureExtract(1, config['emb_dim'])
+        self.avgPoolingFunction =  AvgPooling()
 
     def forward(self,**kwargs):
         """
@@ -122,19 +123,23 @@ class ARGModel(torch.nn.Module):
 
         mutual_content_FTR_2, _ = self.cross_attention_content_2( \
             content_feature_2, FTR_2_feature, content_masks)
-        expert_2 = torch.mean(mutual_content_FTR_2, dim=1)
+        #expert_2 = self.avgPoolingFunction(mutual_content_FTR_2,FTR_2_masks)
+        expert_2 = torch.mean(mutual_content_FTR_2,dim=1)
 
         mutual_content_FTR_3, _ = self.cross_attention_content_3( \
             content_feature_2, FTR_3_feature, content_masks)
-        expert_3 = torch.mean(mutual_content_FTR_3, dim=1)
+        #expert_3 = self.avgPoolingFunction(mutual_content_FTR_3,FTR_3_masks)
+        expert_3 = torch.mean(mutual_content_FTR_3,dim=1)
 
         mutual_FTR_content_2, _ = self.cross_attention_ftr_2( \
             FTR_2_feature, content_feature_2, FTR_2_masks)
-        mutual_FTR_content_2 = torch.mean(mutual_FTR_content_2, dim=1)
+        #mutual_FTR_content_2 = self.avgPoolingFunction(mutual_FTR_content_2,content_masks)
+        mutual_FTR_content_2 = torch.mean(mutual_FTR_content_2,dim=1)
 
         mutual_FTR_content_3, _ = self.cross_attention_ftr_3( \
             FTR_3_feature, content_feature_2, FTR_3_masks)
-        mutual_FTR_content_3 = torch.mean(mutual_FTR_content_3, dim=1)
+        #mutual_FTR_content_3 = self.avgPoolingFunction(mutual_FTR_content_3,content_masks)
+        mutual_FTR_content_3 = torch.mean(mutual_FTR_content_3,dim=1)
 
         hard_ftr_2_pred = self.hard_mlp_ftr_2(mutual_FTR_content_2).squeeze(1)
         hard_ftr_3_pred = self.hard_mlp_ftr_3(mutual_FTR_content_3).squeeze(1)

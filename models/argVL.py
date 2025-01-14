@@ -16,13 +16,28 @@ from transformers import BertModel, Swinv2Model
 from utils.utils import data2gpu, Averager, metrics, Recorder, try_all_gpus, ARGMetricsRecorder
 
 
+
+
+
+
+
+
+
 class ARGModel(torch.nn.Module):
     def __init__(self, config):
         super(ARGModel, self).__init__()
 
         self.bert_content = BertModel.from_pretrained(config['bert_path']).requires_grad_(False)
         self.bert_FTR = BertModel.from_pretrained(config['bert_path']).requires_grad_(False)
+        self.bert_caption = BertModel.from_pretrained(config['bert_path']).requires_grad_(False)
         self.image_encoder = Swinv2Model.from_pretrained(config['image_encoder_path']).requires_grad_(False)
+        self.imageGate = ImageCaptionGate()
+
+        for name, param in self.bert_caption.named_parameters():
+            if name.startswith("encoder.layer.11"):
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
 
         for name, param in self.bert_content.named_parameters():
             if name.startswith("encoder.layer.11"):
@@ -41,7 +56,7 @@ class ARGModel(torch.nn.Module):
             else:
                 param.requires_grad = False
 
-        self.aggregator = MaskAttention(config['emb_dim'])
+        #self.aggregator = MaskAttention(config['emb_dim'])
         self.mlp = MLP(config['emb_dim'], config['model']['mlp']['dims'], config['model']['mlp']['dropout'])
 
         self.hard_ftr_2_attention = MaskAttention(config['emb_dim'])
@@ -102,7 +117,7 @@ class ARGModel(torch.nn.Module):
 
         self.cross_attention_ftr_2 = SelfAttentionFeatureExtract(1, config['emb_dim'])
         self.cross_attention_ftr_3 = SelfAttentionFeatureExtract(1, config['emb_dim'])
-        self.dualCrossAttention = DualCrossAttentionFusion(config['emb_dim'],4,config['model']['mlp']['dropout'],4)
+        self.featureAggregator = FeatureAggregation(config['emb_dim'])
 
     def forward(self,**kwargs):
         """
@@ -112,6 +127,9 @@ class ARGModel(torch.nn.Module):
         :param FTR_3 : shape (batch_size,seq_len) CS Rationale
         :param FTR_2_masks : shape (batch_size,seq_len) TD Rationale Masks
         :param FTR_3_masks : shape (batch_size,seq_len) CS Rationale Masks
+        :param image : shape (batch_size,3,224,224) Image Feature
+        :param caption : shape (batch_size,seq_len) News Caption
+        :param caption_masks : shape (batch_size,seq_len) News Caption Masks
         :return: {
             'classify_pred': Real or Fake ,shape (batch_size)
             'hard_ftr_2_pred':TD Rationale Usefulness  Evaluator ,shape (batch_size)
@@ -121,6 +139,8 @@ class ARGModel(torch.nn.Module):
         }
         """
         content, content_masks = kwargs['content'], kwargs['content_masks']
+        caption, caption_masks = kwargs['caption'], kwargs['caption_masks']
+
         image = kwargs['image']
 
 
@@ -128,13 +148,15 @@ class ARGModel(torch.nn.Module):
         FTR_3, FTR_3_masks = kwargs['FTR_3'], kwargs['FTR_3_masks']
 
         content_feature = self.bert_content(content, attention_mask=content_masks)[0]
-        image_feature = self.image_encoder(image)[0]
-        image_mask = torch.ones((image_feature.shape[0],image_feature.shape[1]),device=image_feature.device)
+        image_pooling_feature = self.image_encoder(image).pooler_output
+        #image_mask = torch.ones((image_feature.shape[0],image_feature.shape[1]),device=image_feature.device)
 
         content_feature_1, content_feature_2 = content_feature, content_feature
 
         FTR_2_feature = self.bert_FTR(FTR_2, attention_mask=FTR_2_masks)[0]
         FTR_3_feature = self.bert_FTR(FTR_3, attention_mask=FTR_3_masks)[0]
+
+        caption_pooling_feature = self.bert_caption(caption, attention_mask=caption_masks).pooler_output
 
         mutual_content_FTR_2, _ = self.cross_attention_content_2( \
             content_feature_2, FTR_2_feature, content_masks)
@@ -159,7 +181,6 @@ class ARGModel(torch.nn.Module):
         simple_ftr_3_pred = self.simple_mlp_ftr_3(self.simple_ftr_3_attention(FTR_3_feature)[0]).squeeze(1)
 
         attn_content, _ = self.content_attention(content_feature_1, mask=content_masks)
-        attn_image, _ = self.image_attention(image_feature, mask=image_mask)
 
         reweight_score_ftr_2 = self.score_mapper_ftr_2(mutual_FTR_content_2)
         reweight_score_ftr_3 = self.score_mapper_ftr_3(mutual_FTR_content_3)
@@ -167,11 +188,16 @@ class ARGModel(torch.nn.Module):
         reweight_expert_2 = reweight_score_ftr_2 * expert_2
         reweight_expert_3 = reweight_score_ftr_3 * expert_3
 
-        all_feature = torch.cat(
-            (attn_content.unsqueeze(1), reweight_expert_2.unsqueeze(1), reweight_expert_3.unsqueeze(1),attn_image.unsqueeze(1)),
-            dim=1
-        )
-        final_feature, _ = self.aggregator(all_feature)
+        #all_feature = torch.cat(
+        #    (attn_content.unsqueeze(1), reweight_expert_2.unsqueeze(1), reweight_expert_3.unsqueeze(1),attn_image.unsqueeze(1)),
+        #    dim=1
+        #)
+        final_feature = self.featureAggregator(content_pooling_feature=attn_content,
+                                                  caption_pooling_feature=caption_pooling_feature,
+                                                  image_pooling_feature=image_pooling_feature,
+                                                  FTR2_pooling_feature=reweight_expert_2,
+                                                  FTR3_pooling_feature=reweight_expert_3,
+                                                  )
 
         label_pred = self.mlp(final_feature)
         gate_value = torch.concat([

@@ -157,6 +157,11 @@ class ARGDataset(Dataset):
 
 def get_dataloader_qwen_goss(path, max_len, batch_size, shuffle, bert_path, data_type, language,image_encoder_path):
     df = pd.read_csv(f'{path}/{data_type}.csv', encoding='utf-8')
+    caption_file_path = f'{path}/gossipcop_qwen_image_caption.csv'
+    if os.path.exists(caption_file_path):
+        caption_df = pd.read_csv(caption_file_path, encoding='utf-8')
+        caption_df.rename(columns={'id': 'source_id'}, inplace=True)
+        df = df.merge(caption_df, on='source_id', how='left')
     image_dir = f'{path}/images'
     df['image_path'] = df['image_id'].apply(lambda x: f'{image_dir}/{x}_top_img.png')
     tokenizer = AutoTokenizer.from_pretrained(bert_path)

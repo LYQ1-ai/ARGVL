@@ -92,7 +92,7 @@ class ARGModel(torch.nn.Module):
 
         self.cross_attention_ftr_2 = SelfAttentionFeatureExtract(1, config['emb_dim'])
         self.cross_attention_ftr_3 = SelfAttentionFeatureExtract(1, config['emb_dim'])
-        self.avgPoolingFunction =  AvgPooling()
+
 
     def forward(self,**kwargs):
         """

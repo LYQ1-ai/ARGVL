@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Function
 import math
-from timm.models.vision_transformer import Block
+
 
 
 
@@ -42,15 +42,10 @@ class AttentionPooling(nn.Module):
 
     def __init__(self,emb_dim):
         super(AttentionPooling, self).__init__()
-        self.attention = nn.Sequential(
-            nn.Linear(emb_dim, int(emb_dim/2)),
-            nn.LayerNorm(int(emb_dim/2)),
-            nn.ReLU(),
-            nn.Linear(int(emb_dim/2), 1)
-        )
+        self.attention = nn.Linear(emb_dim,1)
 
 
-    def forward(self, input_feature, attention_mask):
+    def forward(self, input_feature, attention_mask=None):
         """
         :param input_feature: shape (batch_size, seq_len, emb_dim)
         :param attention_mask: shape (batch_size, seq_len)
@@ -58,35 +53,20 @@ class AttentionPooling(nn.Module):
         """
 
         attention_scores = self.attention(input_feature).squeeze(-1) # shape (batch_size, seq_len)
-        attention_scores = attention_scores.masked_fill(~attention_mask.bool(), float('-inf'))
+        if attention_mask is not None:
+            attention_scores = attention_scores.masked_fill(~attention_mask.bool(), float('-inf'))
         attention_weights = nn.functional.softmax(attention_scores, dim=-1) # shape (batch_size, seq_len)
         attention_pooling_feature = torch.bmm(attention_weights.unsqueeze(1), input_feature).squeeze(1) # shape (batch_size, emb_dim)
         return attention_pooling_feature
 
 class AvgPooling(nn.Module):
-    def forward(self, input_feature, attention_mask):
+    def forward(self, input_feature, attention_mask=None):
         """
         :param input_feature: shape (batch_size, seq_len, emb_dim)
         :param attention_mask: shape (batch_size, seq_len)
         :return: pooling_feature: shape (batch_size, emb_dim)
         """
-        # 扩展 attention_mask 的维度以匹配 input_feature 的维度
-        expanded_attention_mask = attention_mask.unsqueeze(-1)  # (batch_size, seq_len, 1)
-
-        # 将 attention_mask 应用于 input_feature
-        masked_input_features = input_feature * expanded_attention_mask
-
-        # 对每个样本的特征求和，并除以有效的（未被mask遮挡的）特征数量
-        sum_masked_features = masked_input_features.sum(dim=1)  # (batch_size, emb_dim)
-        num_valid_features = expanded_attention_mask.sum(dim=1)  # (batch_size, 1)
-
-        # 防止除以0的情况发生
-        num_valid_features = torch.where(num_valid_features == 0,torch.ones_like(num_valid_features,device=num_valid_features.device),num_valid_features)
-
-        # 计算平均值
-        pooling_feature = sum_masked_features / num_valid_features
-
-        return pooling_feature
+        pass
 
 
 
@@ -114,6 +94,41 @@ class ImageCaptionGate(nn.Module):
         similarity = nn.functional.cosine_similarity(content_pooling_feature, caption_pooling_feature, dim=1)
         return similarity
 
+
+class ImageCaptionGate2(nn.Module):
+    def __init__(self,config):
+        super(ImageCaptionGate2, self).__init__()
+        self.attention = nn.MultiheadAttention(config['emb_dim'],1,batch_first=True)
+        self.attention_pooling = AttentionPooling(config['emb_dim'])
+        self.image_classifier = nn.Sequential(
+            nn.Linear(config['emb_dim'], config['model']['mlp']['dims'][-1]),
+            nn.BatchNorm1d(config['model']['mlp']['dims'][-1]),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(config['model']['mlp']['dims'][-1], 64),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, caption_feature,content_feature,caption_mask,content_mask):
+        """
+        :param caption_feature: shape (batch_size, seq_len, emb_dim)
+        :param content_feature: shape (batch_size, seq_len, emb_dim)
+        :param caption_mask: shape (batch_size, seq_len)
+        :param content_mask: shape (batch_size, seq_len)
+        :return: shape: (batch_size, 1)
+        """
+        content2caption_attn = self.attention(query = content_feature,
+                                              key = caption_feature,
+                                              value = caption_feature,
+                                              key_padding_mask=~caption_mask.bool())[0]
+        content2caption_attn_pooling = self.attention_pooling(content2caption_attn,attention_mask=content_mask)
+        return self.image_classifier(content2caption_attn_pooling)
+
+
 class FeatureAggregation(nn.Module):
 
     def __init__(self,emb_dim):
@@ -125,6 +140,19 @@ class FeatureAggregation(nn.Module):
         image_gate_value = self.imageGate(content_pooling_feature,caption_pooling_feature).unsqueeze(-1) # shape (batch_size,1)
         image_pooling_feature = image_gate_value * image_pooling_feature
         final_feature = torch.cat( [content_pooling_feature.unsqueeze(1),image_pooling_feature.unsqueeze(1),FTR2_pooling_feature.unsqueeze(1),FTR3_pooling_feature.unsqueeze(1)],dim=1)
+        return self.maskAttention(final_feature)[0]
+
+
+class FeatureNoGateAggregation(nn.Module):
+
+    def __init__(self, emb_dim, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.maskAttention = MaskAttention(emb_dim)
+
+    def forward(self, content_pooling_feature, image_pooling_feature, FTR2_pooling_feature,
+                FTR3_pooling_feature):
+        final_feature = torch.cat([content_pooling_feature.unsqueeze(1), image_pooling_feature.unsqueeze(1),
+                                   FTR2_pooling_feature.unsqueeze(1), FTR3_pooling_feature.unsqueeze(1)], dim=1)
         return self.maskAttention(final_feature)[0]
 
 

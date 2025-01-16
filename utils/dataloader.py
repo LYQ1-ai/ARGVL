@@ -1,3 +1,5 @@
+import logging
+
 import os
 import pickle
 import warnings
@@ -112,18 +114,16 @@ class ARGDataset(Dataset):
         if os.path.exists(cache_file):
             with open(cache_file, "rb") as f:
                 self.data = pickle.load(f)
-            print(f"Loaded cached dataset from {cache_file}")
+            logging.info(f"Loaded cached dataset from {cache_file}")
         else:
             # 数据预处理
-            print(f'before filter:{df.shape[0]}')
             df = df[df.apply(lambda x: self.is_valid_item(x), axis=1)]
-            print(f'after filter:{df.shape[0]}')
             df["source_id"] = df['source_id'].astype(dtype=str)
             df['content'], df['content_masks'] = zip(*df['content'].apply(lambda x: sent2tensor(x, max_len, tokenizer)))
             df['td_rationale'], df['td_mask'] = zip(*df['td_rationale'].apply(lambda x: sent2tensor(x, max_len, tokenizer)))
             df['cs_rationale'], df['cs_mask'] = zip(*df['cs_rationale'].apply(lambda x: sent2tensor(x, max_len, tokenizer)))
             if 'caption' in df.columns:
-                df['caption'],df['caption_mask'] = zip(*df['caption'].apply(lambda x: sent2tensor(x, max_len, tokenizer)))
+                df['caption'],df['caption_masks'] = zip(*df['caption'].apply(lambda x: sent2tensor(x, max_len, tokenizer)))
 
             if  image_processor is not None:
                 df['image'] = df['image_path'].apply(lambda x: process_image(x, image_processor))
@@ -141,12 +141,16 @@ class ARGDataset(Dataset):
             }, inplace=True)
 
             # 转换为字典列表
+            logging.info(f'load sum : {df.shape[0]} real {df[df["label"]==label_str2int_dict["real"]].shape[0]} , fake {df[df["label"]==label_str2int_dict["fake"]].shape[0]}')
             self.data = df.to_dict(orient='records')
 
+
+            os.makedirs(os.path.dirname(cache_file), exist_ok=True)
             # 保存到缓存文件
             with open(cache_file, "wb") as f:
                 pickle.dump(self.data, f)
-            print(f"Processed and cached dataset to {cache_file}")
+            logging.info(f"Processed and cached dataset to {cache_file}")
+
 
     def __len__(self):
         return len(self.data)
@@ -157,18 +161,16 @@ class ARGDataset(Dataset):
 
 def get_dataloader_qwen_goss(path, max_len, batch_size, shuffle, bert_path, data_type, language,image_encoder_path):
     df = pd.read_csv(f'{path}/{data_type}.csv', encoding='utf-8')
-    caption_file_path = f'{path}/gossipcop_qwen_image_caption.csv'
-    if os.path.exists(caption_file_path):
-        caption_df = pd.read_csv(caption_file_path, encoding='utf-8')
-        caption_df.rename(columns={'id': 'source_id'}, inplace=True)
-        df = df.merge(caption_df, on='source_id', how='left')
+    df = merge_captions(path,df)
     image_dir = f'{path}/images'
     df['image_path'] = df['image_id'].apply(lambda x: f'{image_dir}/{x}_top_img.png')
     tokenizer = AutoTokenizer.from_pretrained(bert_path)
     image_processor = AutoImageProcessor.from_pretrained(image_encoder_path) if image_encoder_path is not None else None
-    print(f'load {data_type} data: sum {df.shape[0]} real {(df["label"]==0).sum()} fake {(df["label"]==1).sum()}')
-    cache_file = f'{path}/{data_type}.pkl'
-    ds = ARGDataset(df,image_processor,max_len,tokenizer,cache_file)
+    if image_encoder_path:
+        cache_file = f'{path}/cache/{data_type}_vl.pkl'
+    else:
+        cache_file = f'{path}/cache/{data_type}.pkl'
+    ds = ARGDataset(df, image_processor, max_len, tokenizer,cache_file=cache_file)
     return DataLoader(
         ds,               # 传入自定义的 Dataset
         batch_size=batch_size, # 批量大小
@@ -191,19 +193,30 @@ def get_dataloader_qwen_twitter(path, max_len, batch_size, shuffle, bert_path, d
     tokenizer = BertTokenizer.from_pretrained(bert_path)
     data_file_name = f'{path}/{data_type}.csv'
     df = pd.read_csv(data_file_name)
+    df = merge_captions(path,df)
     image_dict = get_image_path_dict()
     df['image_path'] = df['image_id'].apply(lambda image_id: image_dict[image_id])
-    print(f'load {data_type} data: sum {df.shape[0]} real {(df["label"]==1).sum()} fake {(df["label"]==0).sum()}')
 
     # df = balance_data(df,data_type)
     image_processor = AutoImageProcessor.from_pretrained(image_encoder_path) if image_encoder_path is not None else None
-    ds = ARGDataset(df, image_processor, max_len, tokenizer,cache_file=f'{path}/{data_type}.pkl')
+
+    if image_encoder_path:
+        cache_file = f'{path}/cache/{data_type}_vl.pkl'
+    else:
+        cache_file = f'{path}/cache/{data_type}.pkl'
+    ds = ARGDataset(df, image_processor, max_len, tokenizer,cache_file=cache_file)
     return DataLoader(
         ds,  # 传入自定义的 Dataset
         batch_size=batch_size,  # 批量大小
         shuffle=True,  # 是否打乱数据
         num_workers=4
     )
+
+def merge_captions(root_path,df):
+    caption_file = os.path.join(root_path,'caption.csv')
+    caption_df = pd.read_csv(caption_file,encoding='utf-8')
+    caption_df = caption_df.rename(columns={'id': 'source_id'})
+    return df.merge(caption_df, on='source_id', how='left')
 
 def get_dataloader_qwen_weibo(path, max_len, batch_size, shuffle, bert_path, data_type, language,image_encoder_path):
 
@@ -217,12 +230,15 @@ def get_dataloader_qwen_weibo(path, max_len, batch_size, shuffle, bert_path, dat
         return image_dict
 
     df = pd.read_csv(f'{path}/{data_type}.csv', encoding='utf-8')
+    df = merge_captions(path,df)
     image_dict = get_image_dict(path)
-
     df['image_path'] = df['image_id'].apply(lambda x: image_dict[x])
     tokenizer = AutoTokenizer.from_pretrained(bert_path)
     image_processor = AutoImageProcessor.from_pretrained(image_encoder_path) if image_encoder_path is not None else None
-    cache_file = f'{path}/cache/{data_type}.pkl'
+    if image_encoder_path:
+        cache_file = f'{path}/cache/{data_type}_vl.pkl'
+    else:
+        cache_file = f'{path}/cache/{data_type}.pkl'
     ds = ARGDataset(df, image_processor, max_len, tokenizer, cache_file)
     return DataLoader(
         ds,  # 传入自定义的 Dataset
@@ -239,8 +255,6 @@ def get_dataloader_arg(path, max_len, batch_size, shuffle, bert_path, data_type,
         df['td_pred'] = df['td_pred'].apply(lambda x: label_dict_ftr_pred[x]).astype(int)
         df['cs_pred'] = df['td_pred'].apply(lambda x: label_dict_ftr_pred[x]).astype(int)
 
-
-    print(f'load {data_type} data: sum {df.shape[0]} real {(df["label"]==label_str2int_dict["real"]).sum()} fake {(df["label"]==label_str2int_dict["fake"]).sum()}')
     tokenizer = BertTokenizer.from_pretrained(bert_path)
     cache_file = f'{path}/{data_type}.pkl'
     ds = ARGDataset(df,None,max_len,tokenizer,cache_file)

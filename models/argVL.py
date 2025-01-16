@@ -117,7 +117,11 @@ class ARGModel(torch.nn.Module):
 
         self.cross_attention_ftr_2 = SelfAttentionFeatureExtract(1, config['emb_dim'])
         self.cross_attention_ftr_3 = SelfAttentionFeatureExtract(1, config['emb_dim'])
-        self.featureAggregator = FeatureAggregation(config['emb_dim'])
+        #self.featureAggregator = FeatureAggregation(config['emb_dim'])
+        self.featureAggregator = FeatureNoGateAggregation(config['emb_dim'])
+        self.imageCaptionGate2 = ImageCaptionGate2(config)
+        self.image_attention_pooling = AttentionPooling(config['emb_dim'])
+        self.image2contentAttention = SelfAttentionFeatureExtract(1, config['emb_dim'])
 
     def forward(self,**kwargs):
         """
@@ -147,16 +151,18 @@ class ARGModel(torch.nn.Module):
         FTR_2, FTR_2_masks = kwargs['FTR_2'], kwargs['FTR_2_masks']
         FTR_3, FTR_3_masks = kwargs['FTR_3'], kwargs['FTR_3_masks']
 
+        # 特征提取
         content_feature = self.bert_content(content, attention_mask=content_masks)[0]
-        image_pooling_feature = self.image_encoder(image).pooler_output
-        #image_mask = torch.ones((image_feature.shape[0],image_feature.shape[1]),device=image_feature.device)
 
-        content_feature_1, content_feature_2 = content_feature, content_feature
+        image_encoding = self.image_encoder(image)
+        image_pooling_feature,image_feature = image_encoding.pooler_output,image_encoding.last_hidden_state
+
+        caption_encoding = self.bert_caption(caption, attention_mask=caption_masks)
+        caption_pooling_feature,caption_feature  = caption_encoding.pooler_output, caption_encoding.last_hidden_state
 
         FTR_2_feature = self.bert_FTR(FTR_2, attention_mask=FTR_2_masks)[0]
         FTR_3_feature = self.bert_FTR(FTR_3, attention_mask=FTR_3_masks)[0]
-
-        caption_pooling_feature = self.bert_caption(caption, attention_mask=caption_masks).pooler_output
+        content_feature_1, content_feature_2 = content_feature, content_feature
 
         mutual_content_FTR_2, _ = self.cross_attention_content_2( \
             content_feature_2, FTR_2_feature, content_masks)
@@ -185,16 +191,19 @@ class ARGModel(torch.nn.Module):
         reweight_score_ftr_2 = self.score_mapper_ftr_2(mutual_FTR_content_2)
         reweight_score_ftr_3 = self.score_mapper_ftr_3(mutual_FTR_content_3)
 
+        reweight_image_feature = self.imageCaptionGate2(caption_feature,
+                                                        content_feature_2,
+                                                        caption_masks,
+                                                        content_masks)
+        image2content_attn = self.image_attention_pooling(self.image2contentAttention(content_feature_2,image_feature,content_masks)[0])
+
+        image2content_attn = reweight_image_feature * image2content_attn
+
         reweight_expert_2 = reweight_score_ftr_2 * expert_2
         reweight_expert_3 = reweight_score_ftr_3 * expert_3
 
-        #all_feature = torch.cat(
-        #    (attn_content.unsqueeze(1), reweight_expert_2.unsqueeze(1), reweight_expert_3.unsqueeze(1),attn_image.unsqueeze(1)),
-        #    dim=1
-        #)
         final_feature = self.featureAggregator(content_pooling_feature=attn_content,
-                                                  caption_pooling_feature=caption_pooling_feature,
-                                                  image_pooling_feature=image_pooling_feature,
+                                                  image_pooling_feature=image2content_attn,
                                                   FTR2_pooling_feature=reweight_expert_2,
                                                   FTR3_pooling_feature=reweight_expert_3,
                                                   )

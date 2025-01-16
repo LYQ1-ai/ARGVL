@@ -44,7 +44,7 @@ parser.add_argument('--kd_loss_weight', type=float, default=1)
 parser.add_argument('--teacher_path', type=str)
 
 args = parser.parse_args()
-os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,3'
 
 #os.environ['TORCH_USE_CUDA_DSA'] = '1'
 
@@ -102,7 +102,7 @@ config = {
     'eval_mode': args.eval_mode,
     'image_encoder_path': args.image_encoder_path,
     'teacher_path': args.teacher_path,
-    'month': 1
+    'month': 2
 }
 
 if __name__ == '__main__':
